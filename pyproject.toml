@@ -9,6 +9,8 @@ dependencies = [
   "torchvision",
   "torchaudio",
   "matplotlib>=3.10.8",
+  "tensorboard>=2.20.0",
+  "torchmetrics>=1.8.2",
 ]
 
 [[tool.uv.index]]

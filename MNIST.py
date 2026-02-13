@@ -1,10 +1,13 @@
 import torch
 import torchvision
 import torch.nn as nn
+# from torch.utils.tensorboard import Summarywriter
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 from torchvision import transforms
 import matplotlib.pyplot as plt 
+import numpy as np
+import torchmetrics
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -28,7 +31,7 @@ class Network(nn.Module):
 
 class Initialize:
     def __init__(self,batch_size=64,):
-        
+        # self.writer=Summarywriter()
         self.batch_size=batch_size
         #initialize any transforms and augmentation
         self.transforms=transforms.Compose([
@@ -62,27 +65,47 @@ class Initialize:
             break
 
 class Control(Initialize):
-    def train(self,model,epochs):  
-        
+    
+    def __init__(self,model,lr=0.001, retrain=False,chpoint_path="mnist.pth"):
+        super().__init__()
+        self.model=model
+        self.retrain=retrain
+        self.loss_fn=nn.CrossEntropyLoss()
+        self.opt=torch.optim.Adam(model.parameters(),lr=lr)
+        self.avg_train_loss=0
+        self.checkpoint=chpoint_path
+        self.metric=torchmetrics.Accuracy(task="multiclass",num_classes=10).to(device)
 
-        loss_fn=nn.CrossEntropyLoss()
-        opt=torch.optim.Adam(model.parameters(),lr=0.001)
-        
-        for epoch in range(epochs):
+
+    def train(self,epochs):  
+        if self.retrain:  
+            losses=[]  
+            for epoch in range(epochs):
+                self.model.train()
+                running_loss=0.
+
+                for input,labels in self.train_dataloader:
+                    input,labels=input.to(device),labels.to(device)
+                    self.opt.zero_grad()
+                    logits=self.model(input)
+                    loss=self.loss_fn(logits,labels)
+                    loss.backward()
+                    self.opt.step()
+
+                    running_loss+=loss.item()
+                epoch_loss=running_loss/len(self.train_dataloader) #total batches loss / total no of batches
+                losses.append(epoch_loss)
+                
+                print(f"Loss after epoch {epoch+1}, Loss : {epoch_loss:.4f}")
+            self.avg_train_loss=float(np.mean(losses))
+            print(f"Avg training loss = {self.avg_train_loss:.2f}")
+            #saves model params for later use
+            torch.save(self.model.state_dict(),self.checkpoint)
+        else:
             
-            running_loss=0.
-
-            for input,labels in self.train_dataloader:
-                input,labels=input.to(device),labels.to(device)
-                opt.zero_grad()
-                logits=model(input)
-                loss=loss_fn(logits,labels)
-                loss.backward()
-                opt.step()
-
-                running_loss+=loss.item()
-            
-            print(f"Loss after epoch {epoch+1}, Loss : {running_loss/len(self.train_dataloader):.4f}")
+            print("Model already trained and ready for evaluation")
+            #laods model parameters from the path that it was saved to
+            self.model.load_state_dict(torch.load(self.checkpoint,map_location=device))
 
 
     def evaluate(self,model):
@@ -91,31 +114,37 @@ class Control(Initialize):
         running_test_loss=0.
         total=0
         correct=0
-        with torch.no_grad():
+
+        with torch.no_grad(): #disables gradient calculation for any operation within its scope
             for test_input,test_labels in self.test_dataloader:
                 #load test data onto gpu
-                test_input,test_labels=test_input.to(device),test_labels.to(device)
+                test_input,test_labels=test_input.to(device).float(),test_labels.to(device)
                 #model inference
-                model_preds=model(test_input)
-                preds=model_preds.argmax(0)
+                model_preds=self.model(test_input)
+                preds=model_preds.argmax(1)
                 #compute loss for test set
-                test_loss=loss_fn(preds,test_labels)
+                test_loss=loss_fn(model_preds,test_labels)
                 #add to running test loss
                 running_test_loss+=test_loss.item()
                 #count total number of examples processed till now
                 total+=test_labels.shape[0]
                 #count correct examples out of this batch
-                correct += (model_preds==test_labels).sum().item()
-
-        test_accuracy=(correct/total)*100
-        avg_test_loss=running_test_loss/len(self.test_dataloader)
-        print(f"Avg accuracy on test set = {test_accuracy:.2f}\nAvg test loss : {avg_test_loss:.2f}")
+                correct += (preds==test_labels).sum().item()
+                self.metric.update(model_preds,test_labels)
+            test_accuracy_manual=(correct/total)*100
+            
+            avg_test_loss=running_test_loss/len(self.test_dataloader)
+            print(f"Average Test accuracy manual = {test_accuracy_manual:.2f}")
+            print(f"Avg accuracy on test set using metric = {self.metric.compute().item()*100:.2f}\nAvg test loss : {avg_test_loss:.2f}")
+        
+        
 
 
 if __name__ == "__main__":
 
     model= Network().to(device)
+    Orchestrator=Control(model,lr=0.001)
+    Orchestrator.train(epochs=10)
+    Orchestrator.evaluate(model)
 
-    print(model)
-
-    print(f"Total network params = {sum(p.numel() for p in model.parameters())}")
+   
