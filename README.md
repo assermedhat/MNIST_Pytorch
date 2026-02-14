@@ -84,6 +84,7 @@ Final performance:
 
 * Training accuracy: **98%**
 * Test accuracy: **97.8%**
+<img width="3000" height="400" alt="preds" src="https://github.com/user-attachments/assets/ca269cbc-5245-413b-91a9-5e342111e992" />
 
 TensorBoard was used to visualize:
 
@@ -119,6 +120,7 @@ MNIST_Pytorch/
 ├── MNIST.py
 ├── runs/
 └── README.md
+
 
 
 
