@@ -121,6 +121,4 @@ MNIST_Pytorch/
 └── README.md
 
 
-Built as part of a deep learning learning journey using PyTorch.
-
 
