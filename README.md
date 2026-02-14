@@ -69,13 +69,14 @@ During initial training runs, TensorBoard showed:
 * Training loss decreasing continuously
 * Test loss increasing near the end of training
   
-![Unreg_Loss Curve](TB plots/Unreg_Loss.png)
+<img width="962" height="405" alt="Uneg_Acc" src="https://github.com/user-attachments/assets/ac98d5bf-00c2-4c4f-9e4d-4e2e88d6118d" />
 
 This indicated **overfitting**.
 
 The issue was resolved by adding **L2 regularization (weight decay)** to the optimizer, which improved generalization and stabilized validation performance.
 ![Unreg_Loss Curve](TB plots/Reg_Loss.png)
 ---
+<img width="1106" height="424" alt="Reg_Loss" src="https://github.com/user-attachments/assets/1b4a84e3-598e-4cdd-8a7c-bb8ffc826245" />
 
 ## Results
 
@@ -121,4 +122,5 @@ MNIST_Pytorch/
 
 
 Built as part of a deep learning learning journey using PyTorch.
+
 
