@@ -1,7 +1,7 @@
 import torch
 import torchvision
 import torch.nn as nn
-# from torch.utils.tensorboard import Summarywriter
+from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 from torchvision import transforms
@@ -31,7 +31,7 @@ class Network(nn.Module):
 
 class Initialize:
     def __init__(self,batch_size=64,):
-        # self.writer=Summarywriter()
+        self.writer=SummaryWriter()
         self.batch_size=batch_size
         #initialize any transforms and augmentation
         self.transforms=transforms.Compose([
@@ -57,7 +57,9 @@ class Initialize:
         #initialization stats
         print(f"Training Set size = {len(self.train_data)}\nTest Set Size = {len(self.test_data)}")
         print(f"Number of batches in training set = {len(self.train_dataloader)}\nNumber of batches in test set = {len(self.test_dataloader)}")
-
+        images,labels=next(iter(self.train_dataloader))
+        self.writer.add_images('training images',images,0)
+        self.writer.close()
         #look at image sizes
         for X,y in self.test_dataloader:
             print(f"Shape of X [N,C,H,W]: {X.shape}")
@@ -71,72 +73,111 @@ class Control(Initialize):
         self.model=model
         self.retrain=retrain
         self.loss_fn=nn.CrossEntropyLoss()
-        self.opt=torch.optim.Adam(model.parameters(),lr=lr)
+        self.opt=torch.optim.Adam(model.parameters(),lr=lr,weight_decay=0.001)
         self.avg_train_loss=0
         self.checkpoint=chpoint_path
         self.metric=torchmetrics.Accuracy(task="multiclass",num_classes=10).to(device)
 
-
-    def train(self,epochs):  
-        if self.retrain:  
-            losses=[]  
-            for epoch in range(epochs):
-                self.model.train()
-                running_loss=0.
-
-                for input,labels in self.train_dataloader:
-                    input,labels=input.to(device),labels.to(device)
-                    self.opt.zero_grad()
-                    logits=self.model(input)
-                    loss=self.loss_fn(logits,labels)
-                    loss.backward()
-                    self.opt.step()
-
-                    running_loss+=loss.item()
-                epoch_loss=running_loss/len(self.train_dataloader) #total batches loss / total no of batches
-                losses.append(epoch_loss)
-                
-                print(f"Loss after epoch {epoch+1}, Loss : {epoch_loss:.4f}")
-            self.avg_train_loss=float(np.mean(losses))
-            print(f"Avg training loss = {self.avg_train_loss:.2f}")
-            #saves model params for later use
-            torch.save(self.model.state_dict(),self.checkpoint)
-        else:
-            
-            print("Model already trained and ready for evaluation")
-            #laods model parameters from the path that it was saved to
-            self.model.load_state_dict(torch.load(self.checkpoint,map_location=device))
-
-
-    def evaluate(self,model):
+#one iteration over training set
+    def train_one_epoch(self):  
+        self.model.train()
+        running_loss=0.0
+        self.metric.reset()
+        for input,labels in self.train_dataloader:
+            #load training data onto gpu
+            input,labels=input.to(device),labels.to(device)
+            #reset gradients 
+            self.opt.zero_grad()
+            #forward pass
+            logits=self.model(input)
+            #compute loss
+            loss=self.loss_fn(logits,labels)
+            #backprop
+            loss.backward()
+            #GD step
+            self.opt.step()
+            #accuracy
+            self.metric.update(logits,labels)
+            #running loss for each batch for average loss over all batches calulcation
+            running_loss+=loss.item()
+        
+        epoch_loss=running_loss/len(self.train_dataloader) #total batches loss / total no of batches
+        train_acc=self.metric.compute().item()
+        return epoch_loss,train_acc
+        
+#one evaluation iteration over test set
+    def evaluate(self):
         model.eval()
         loss_fn=nn.CrossEntropyLoss()
         running_test_loss=0.
-        total=0
-        correct=0
+        self.metric.reset()
 
         with torch.no_grad(): #disables gradient calculation for any operation within its scope
-            for test_input,test_labels in self.test_dataloader:
+            for i,(test_input,test_labels) in enumerate(self.test_dataloader):
                 #load test data onto gpu
                 test_input,test_labels=test_input.to(device).float(),test_labels.to(device)
                 #model inference
                 model_preds=self.model(test_input)
-                preds=model_preds.argmax(1)
                 #compute loss for test set
                 test_loss=loss_fn(model_preds,test_labels)
                 #add to running test loss
                 running_test_loss+=test_loss.item()
-                #count total number of examples processed till now
-                total+=test_labels.shape[0]
-                #count correct examples out of this batch
-                correct += (preds==test_labels).sum().item()
+                #compute accuracy
                 self.metric.update(model_preds,test_labels)
-            test_accuracy_manual=(correct/total)*100
-            
-            avg_test_loss=running_test_loss/len(self.test_dataloader)
-            print(f"Average Test accuracy manual = {test_accuracy_manual:.2f}")
-            print(f"Avg accuracy on test set using metric = {self.metric.compute().item()*100:.2f}\nAvg test loss : {avg_test_loss:.2f}")
-        
+
+        avg_test_loss=running_test_loss/len(self.test_dataloader)
+        test_acc=self.metric.compute().item()
+        return avg_test_loss,test_acc
+    
+    def fit(self,epochs):
+        if not self.retrain:
+            print("Model already trained and ready for evaluation")
+            self.model.load_state_dict(torch.load(self.checkpoint,map_location=device))
+            return
+        train_losses=[]
+        for epoch in range(epochs):
+            train_loss,train_acc=self.train_one_epoch()
+            test_loss,test_acc=self.evaluate()
+            train_losses.append(train_loss)
+
+            #tensorboard visualization
+            self.writer.add_scalar('Loss/train',train_loss,epoch)
+            self.writer.add_scalar('Loss/test',test_loss,epoch)
+            self.writer.add_scalar('Accuracy/train',train_acc,epoch)
+            self.writer.add_scalar('Accuracy/test',test_acc,epoch)
+
+            #print metrics
+
+            print(f"Epoch {epoch+1}/{epochs} : "
+                  f"train loss = {train_loss:.4f} , acc train = {train_acc*100:.2f}"
+                  f"test loss {test_loss:.4f} , test acc = {test_acc*100:.2f}")
+        self.avg_train_loss =  float(np.mean(train_losses))  
+        print(f"Average train loss = {self.avg_train_loss:.4f}")
+        torch.save(self.model.state_dict(),self.checkpoint)
+
+
+    def log_test_preds(self,num_imgs=10,step=0):
+        self.model.eval()
+        images,labels=next(iter(self.test_dataloader))
+        images,labels=images.to(device),labels.to(device)
+
+        with torch.no_grad():
+            logits=self.model(images)
+            preds=logits.argmax(1)
+
+        images=images.cpu()
+        preds=preds.cpu()
+        labels=labels.cpu()
+
+        fig = plt.figure(figsize=(num_imgs*3,4))
+
+        for i in range(num_imgs):
+            ax= fig.add_subplot(1,num_imgs,i+1)
+            ax.imshow(images[i].squeeze(),cmap="gray") 
+            ax.set_title(f"P:{preds[i].item()} A:{labels[i].item()}")
+            ax.axis("off")
+
+        self.writer.add_figure("Test Predictions",fig,global_step=step)       
         
 
 
@@ -144,7 +185,9 @@ if __name__ == "__main__":
 
     model= Network().to(device)
     Orchestrator=Control(model,lr=0.001)
-    Orchestrator.train(epochs=10)
-    Orchestrator.evaluate(model)
+    Orchestrator.fit(epochs=8)
+    test_loss,test_acc=Orchestrator.evaluate()
+    print(F"Final test_loss = {test_loss:.4f}\nFinal test acc = {test_acc*100:.2f}")
+    Orchestrator.log_test_preds(step=0)
 
    
